@@ -1,0 +1,65 @@
+version: "3"
+
+tasks:
+  docker_build:
+    vars:
+      COMMIT_HASH:
+        sh: "git rev-parse --short HEAD"
+      IMAGE_NAME: db_server
+      HISTORY_FILE_NAME: docker_versions.yaml
+      DATETIME:
+        sh: 'date +"%d.%m.%Y %H:%M"'
+      VERSION: "{{.CLI_ARGS}}"
+      IMAGE_TAG: "{{.IMAGE_NAME}}:{{.VERSION}}-{{.COMMIT_HASH}}"
+    aliases:
+      - db
+    preconditions:
+      - sh: test -n "{{.CLI_ARGS}}"
+        msg: "Version not found, specify one: -- v1.2.3"
+    cmds:
+      - docker build -t {{.IMAGE_TAG}} .
+      - |
+        if [ ! -f {{.HISTORY_FILE_NAME}} ]; then
+          echo "builds:" > {{.HISTORY_FILE_NAME}}
+        fi
+      - |
+        cat >> {{.HISTORY_FILE_NAME}} <<EOF
+        - {{.VERSION}}:
+          name: {{.IMAGE_TAG}}
+          datetime: {{.DATETIME}}
+        EOF
+      - echo "Image {{.IMAGE_TAG}} built successfully"
+    desc: Build the Docker image with commit and version.
+
+  run_migration:
+    aliases:
+      - am
+    cmds:
+      - cargo r
+    desc: Apply migrations
+    env:
+      MIGRATION_TYPE: 1
+  run_with_data:
+    aliases:
+      - adm
+    env:
+      MIGRATION_TYPE: 3
+    cmds:
+      - cargo r
+    desc: Run migration script with data
+  revert_migration:
+    aliases:
+      - rm
+    env:
+      MIGRATION_TYPE: 2
+    cmds:
+      - cargo r
+    desc: Run revert migration script
+  run_and_clear:
+    aliases:
+      - rac
+    cmds:
+      - cargo r
+    desc: Run migration script and clear data
+    env:
+      MIGRATION_TYPE: 4

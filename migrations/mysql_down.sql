@@ -1,0 +1,11 @@
+DROP TABLE IF EXISTS relations;
+DROP TABLE IF EXISTS relation_types;
+DROP TABLE IF EXISTS events;
+DROP TABLE IF EXISTS event_types;
+DROP TABLE IF EXISTS characters;
+DROP TABLE IF EXISTS character_types;
+
+DROP TABLE IF EXISTS project_members;
+DROP TABLE IF EXISTS projects;
+DROP TABLE IF EXISTS sessions;
+DROP TABLE IF EXISTS users;
