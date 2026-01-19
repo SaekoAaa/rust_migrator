@@ -5,7 +5,7 @@ tasks:
     vars:
       COMMIT_HASH:
         sh: "git rev-parse --short HEAD"
-      IMAGE_NAME: db_server
+      IMAGE_NAME: rust_migrator
       HISTORY_FILE_NAME: docker_versions.yaml
       DATETIME:
         sh: 'date +"%d.%m.%Y %H:%M"'
