@@ -1,31 +1,35 @@
-# MySQL Migrator Service
+# MySQL Migrator
 
-A small, single-run MySQL migration utility intended for containers, deployment jobs, and local development. It applies or reverts SQL files, supports credentials from environment variables or mounted secret files, and can optionally export OpenTelemetry traces and metrics.
+A focused MySQL migration runner for containers, Kubernetes Jobs, deployment hooks, and small services. It ships as a single Rust binary, uses one database connection, tracks applied schema versions, supports mounted secrets, and exits as soon as its work is complete.
 
-> **Project status:** early development. The current release executes a fixed set of migration files and does not yet maintain a migration history, verify checksums, or coordinate concurrent instances. Run only one instance at a time and review the [limitations](#current-limitations) before production use.
+| Artifact | Size |
+| --- | ---: |
+| Optimized release binary | **6.01 MB** |
+| Minimal container image | **6.11 MB** |
 
-## Features
+*Lightweight and popular sqlx-cli image size is 23 MB as example
 
-- Small Rust binary that exits when the requested operation finishes
-- Four migration workflows: apply, revert, apply with seed data, and apply then clear data
-- Docker/Kubernetes-style secret file support
-- Non-root runtime container
-- A single MySQL connection for predictable database resource usage
-- Schema version tracking for successful apply and revert operations
-- Compile-time optional OTLP/HTTP traces and metrics
-- Non-zero exit status on configuration, connection, file, SQL, or telemetry initialization errors
+The default build includes Rustls-based MySQL TLS support without bundling the optional OpenTelemetry exporter stack.
+
+## Why this project
+
+- **Predictable footprint:** one MySQL connection and no long-running service
+- **Deployment-friendly:** standalone binary and non-root Alpine image
+- **Traceable changes:** successful operations are recorded in `schema_versions`
+- **Secret-aware:** credentials can come from environment variables or mounted files
+- **Observable when needed:** OTLP traces and metrics are a compile-time feature
+- **Automation-ready:** non-zero failure exits, GHCR publishing, and immutable version tags
+- **Safe logging:** database passwords are never included in connection logs
 
 ## Quick start
 
-Create a `.env` file from `.env.example`, set the MySQL credentials, then start the example stack:
+### Run the binary
+
+Download the release binary and make it executable:
 
 ```sh
-docker compose up --build --abort-on-container-exit db_migrator
-```
+chmod +x migrator_service
 
-To run the binary directly:
-
-```sh
 MYSQL_USER=app \
 MYSQL_PASSWORD=secret \
 MYSQL_ADDRESS=127.0.0.1 \
@@ -33,27 +37,60 @@ MYSQL_PORT=3306 \
 MYSQL_DATABASE=app_db \
 MIGRATIONS_PATH=./migrations \
 MIGRATION_TYPE=1 \
-cargo run --release
+./migrator_service
 ```
 
-## Migration files
+The process exits with code `0` after success and a non-zero code after a configuration, connection, file, SQL, or telemetry initialization failure.
 
-The directory configured by `MIGRATIONS_PATH` may contain these fixed filenames:
+### Run the container
 
-| File | Purpose |
-| --- | --- |
-| `mysql_up.sql` | Create or update the schema |
-| `mysql_down.sql` | Revert the schema |
-| `mysql_fill_data.sql` | Insert seed data |
-| `mysql_drop_data.sql` | Remove seeded data |
+```sh
+docker run --rm \
+  -e MYSQL_USER=app \
+  -e MYSQL_PASSWORD=secret \
+  -e MYSQL_ADDRESS=mysql.example.internal \
+  -e MYSQL_PORT=3306 \
+  -e MYSQL_DATABASE=app_db \
+  -e MIGRATIONS_PATH=/migrations \
+  -e MIGRATION_TYPE=1 \
+  -v "$PWD/migrations:/migrations:ro" \
+  ghcr.io/saekoaaa/migrator-service:latest
+```
 
-`mysql_fill_data.sql` may use a `-- tx;` statement to commit the current data transaction and begin another one.
+The image runs as UID `10001` without a login shell or home directory.
 
-### Schema versions
+## Migration modes
 
-On startup, the migrator creates a `schema_versions` table when it does not exist. Each successful apply operation records the next numeric version together with the migration mode, SQL filenames, and application timestamp. A revert requires an existing version and removes the latest version only after `mysql_down.sql` succeeds.
+The directory configured by `MIGRATIONS_PATH` uses four explicit files:
 
-The table is managed automatically:
+| `MIGRATION_TYPE` | Operation | Files executed |
+| ---: | --- | --- |
+| `1` | Apply schema | `mysql_up.sql` |
+| `2` | Revert schema | `mysql_down.sql` |
+| `3` | Apply schema and seed data | `mysql_up.sql`, `mysql_fill_data.sql` |
+| `4` | Apply schema and clear data | `mysql_up.sql`, `mysql_drop_data.sql` |
+
+`MIGRATION_TYPE` defaults to `1` when omitted.
+
+### Split large data migrations
+
+Data migrations can be divided into smaller transactions with a `-- tx;` boundary:
+
+```sql
+INSERT INTO users (email, password_hash, role)
+VALUES ('admin@example.com', 'example-hash', 'admin');
+
+-- tx;
+
+INSERT INTO projects (owner_id, name, valid_name, description)
+VALUES (1, 'Example', 'example', 'Example project');
+```
+
+The current transaction is committed at each boundary and a new transaction is opened for the following statements. This is useful for controlling transaction size in seed-data workloads.
+
+## Schema version tracking
+
+The migrator automatically creates a `schema_versions` table. A successful apply mode records the next numeric version, migration mode, executed files, and timestamp. Revert requires an existing version and removes the latest version record only after `mysql_down.sql` succeeds.
 
 ```sql
 CREATE TABLE schema_versions (
@@ -64,8 +101,6 @@ CREATE TABLE schema_versions (
 );
 ```
 
-Because the current migration files are fixed rather than versioned, this table records successful migration runs rather than checksums of independently versioned files.
-
 ## Configuration
 
 | Variable | Required | Description |
@@ -73,79 +108,77 @@ Because the current migration files are fixed rather than versioned, this table 
 | `MYSQL_ADDRESS` | Yes | MySQL hostname or IP address |
 | `MYSQL_PORT` | Yes | MySQL TCP port |
 | `MYSQL_DATABASE` | Yes | Database name |
-| `MYSQL_USER` | Conditional | Username; takes precedence over `MYSQL_USER_FILE` |
-| `MYSQL_PASSWORD` | Conditional | Password; takes precedence over `MYSQL_PASSWORD_FILE` |
+| `MYSQL_USER` | Conditional | Username; preferred over `MYSQL_USER_FILE` |
+| `MYSQL_PASSWORD` | Conditional | Password; preferred over `MYSQL_PASSWORD_FILE` |
 | `MYSQL_USER_FILE` | Conditional | File containing the username |
 | `MYSQL_PASSWORD_FILE` | Conditional | File containing the password |
-| `MIGRATIONS_PATH` | Yes | Directory containing the migration files |
-| `MIGRATION_TYPE` | No | Numeric operation, defaults to `1` |
-| `WITH_TRACING` | No | Set to `true` to enable OTLP tracing in a telemetry-enabled build |
-| `WITH_METRICS` | No | Set to `true` to enable OTLP metrics in a telemetry-enabled build |
-| `COLLECTOR_URL` | Conditional | OTLP base URL, for example `http://otel:4318/v1` |
+| `MIGRATIONS_PATH` | Yes | Directory containing migration files |
+| `MIGRATION_TYPE` | No | Migration mode; defaults to `1` |
 
-At least one source must be available for each credential. The direct variable takes precedence when both it and its corresponding `_FILE` variable are set.
+At least one source must be provided for each credential. Direct variables take precedence over their corresponding `_FILE` variables.
 
-### Operations
+## Optional OpenTelemetry
 
-| `MIGRATION_TYPE` | Operation | Files executed |
-| --- | --- | --- |
-| `1` | Apply migration | `mysql_up.sql` |
-| `2` | Revert migration | `mysql_down.sql` |
-| `3` | Apply with seed data | `mysql_up.sql`, then `mysql_fill_data.sql` |
-| `4` | Apply and clear data | `mysql_up.sql`, then `mysql_drop_data.sql` |
-
-## Observability
-
-Telemetry dependencies are excluded from default builds to minimize binary and image size. Build with the `telemetry` feature to include them:
+Telemetry dependencies are excluded from the minimal build. Compile them explicitly when OTLP traces or metrics are required:
 
 ```sh
-cargo build --release --features telemetry
-docker build --build-arg 'CARGO_FEATURES=--features telemetry' -t mysql-migrator:telemetry .
+cargo build --release --locked --features telemetry
 ```
 
-Without that feature, `WITH_TRACING`, `WITH_METRICS`, and `COLLECTOR_URL` have no effect. In a telemetry-enabled build the exporters remain disabled at runtime unless their corresponding `WITH_*` variable is `true`. When enabled, telemetry is sent over OTLP/HTTP to:
+For a telemetry-enabled container:
 
-- `${COLLECTOR_URL}/traces`
-- `${COLLECTOR_URL}/metrics`
+```sh
+docker build \
+  --build-arg "CARGO_FEATURES=--features telemetry" \
+  -t migrator-service:telemetry \
+  .
+```
 
-The included Compose stack contains an OpenTelemetry Collector, Jaeger, and Prometheus configuration for local evaluation. Database credentials are not included in connection log messages.
+Runtime configuration:
 
-## Container deployment
+| Variable | Description |
+| --- | --- |
+| `WITH_TRACING=true` | Export OTLP/HTTP traces |
+| `WITH_METRICS=true` | Export OTLP/HTTP metrics |
+| `COLLECTOR_URL` | OTLP base URL, such as `http://otel:4318/v1` |
 
-The supplied image runs as UID `10001` without a login shell or home directory. Mount migrations read-only and provide credentials through your platform's secret mechanism. A Kubernetes deployment should run this program as a single Job or controlled deployment hook, not as a replicated long-running service.
+The included Compose stack provides OpenTelemetry Collector, Jaeger, and Prometheus configurations for local evaluation.
 
-Recommended container settings include a read-only root filesystem, disabled privilege escalation, dropped Linux capabilities, explicit CPU/memory requests, and a finite Job retry policy.
+## Build and publish
 
-## Current limitations
+Build the optimized minimal binary:
 
-- No migration checksum validation
-- No database advisory lock; concurrent executions are unsafe
-- SQL is split on semicolons and therefore does not support stored procedures, triggers, custom delimiters, or semicolons inside SQL strings
-- MySQL DDL can cause implicit commits, so schema changes are not guaranteed to roll back atomically
-- Migration filenames are fixed rather than versioned
-- TLS and connection/query timeouts are not yet configurable
+```sh
+cargo build --release --locked
+```
 
-These constraints are intentionally documented so operators can decide whether the tool fits their workload.
+Build the container:
 
-## Development
+```sh
+docker build --build-arg RUST_VERSION=1.89 -t migrator-service .
+```
+
+Publish a version to GHCR through the Taskfile:
+
+```sh
+task push_package -- v1.2.3
+```
+
+Pushing a `v*` Git tag also triggers the GitHub Actions workflow and publishes version, commit-SHA, and `latest` image tags.
+
+## Development checks
 
 ```sh
 cargo fmt --check
-cargo test
-cargo clippy --all-targets --all-features
-cargo build --release
-cargo build --release --features telemetry
+cargo test --locked
+cargo clippy --locked --all-targets --all-features -- -D warnings
 ```
 
-Task aliases are also available through [Task](https://taskfile.dev/):
+## Operational boundaries
 
-```sh
-task am   # apply
-task rm   # revert
-task adm  # apply with data
-task rac  # apply and clear data
-```
+- Run a single migrator instance at a time; advisory locking is not implemented yet.
+- Migration files have fixed names and do not currently store checksums.
+- SQL is split on semicolons, so stored procedures, custom delimiters, and semicolons inside strings are not supported.
+- MySQL may implicitly commit DDL statements; schema rollback is therefore not guaranteed to be atomic.
 
-## Roadmap
-
-The next reliability milestones are versioned migration files with checksums, MySQL advisory locking, integration tests, and configurable TLS/timeouts.
+These boundaries keep the runner intentionally compact and are documented so operators can evaluate it against their deployment requirements.
