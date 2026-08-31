@@ -63,3 +63,20 @@ tasks:
     desc: Run migration script and clear data
     env:
       MIGRATION_TYPE: 4
+  push_package:
+    vars:
+      IMAGE_REPOSITORY: ghcr.io/saekoaaa/migrator-service
+      VERSION: "{{.CLI_ARGS}}"
+    preconditions:
+      - sh: test -n "{{.VERSION}}"
+        msg: "Version not found, specify one: task push_package -- v1.2.3"
+    cmds:
+      - >-
+        docker build
+        --build-arg RUST_VERSION=1.89.0
+        --tag "{{.IMAGE_REPOSITORY}}:{{.VERSION}}"
+        --tag "{{.IMAGE_REPOSITORY}}:latest"
+        .
+      - docker push "{{.IMAGE_REPOSITORY}}:{{.VERSION}}"
+      - docker push "{{.IMAGE_REPOSITORY}}:latest"
+    desc: Build and push versioned and latest images to GHCR.

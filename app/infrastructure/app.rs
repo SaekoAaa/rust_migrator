@@ -1,18 +1,19 @@
 use std::path::Path;
 
+#[cfg(feature = "telemetry")]
 use opentelemetry::KeyValue;
 
-use crate::{
-    infrastructure::{
-        database::connect_to_database,
-        features::{
-            apply_and_clear::apply_and_clear_data, apply_migration::apply_migration,
-            apply_with_insert::apply_with_insert, revert_migration::revert_migration,
-        },
-        load_env::{Enviroment, MigrationType},
+use crate::infrastructure::{
+    database::connect_to_database,
+    features::{
+        apply_and_clear::apply_and_clear_data, apply_migration::apply_migration,
+        apply_with_insert::apply_with_insert, revert_migration::revert_migration,
     },
-    observability::metrics::{MIGRATIONS_COUNTER, MIGRATIONS_DURATION},
+    load_env::{Enviroment, MigrationType},
+    schema_versions::{ensure_table, latest_version, record_applied, remove_version},
 };
+#[cfg(feature = "telemetry")]
+use crate::observability::metrics::{MIGRATIONS_COUNTER, MIGRATIONS_DURATION};
 
 #[tracing::instrument(level = "info")]
 pub fn run() -> anyhow::Result<()> {
@@ -38,20 +39,32 @@ pub fn run() -> anyhow::Result<()> {
         &env.mysql_password,
     )
         .inspect_err(|error| tracing::error!(%error, database = env.database, database.user = env.mysql_user, database.address = env.database_address, database.port = env.database_port, "Connecting to database error"))?;
+    ensure_table(&pool)?;
     let migration_path = Path::new(&env.migrations_path);
+    #[cfg(feature = "telemetry")]
     let timer = std::time::Instant::now();
     match env.migration_type {
         MigrationType::RevertMigration => {
-            revert_migration(&pool, &migration_path.join("mysql_down.sql"))?
+            let version = latest_version(&pool)?.ok_or_else(|| {
+                anyhow::anyhow!("Cannot revert: no applied schema version exists")
+            })?;
+            revert_migration(&pool, &migration_path.join("mysql_down.sql"))?;
+            remove_version(&pool, version)?;
         }
         MigrationType::ApplyMigration => {
-            apply_migration(&pool, &migration_path.join("mysql_up.sql"))?
+            apply_migration(&pool, &migration_path.join("mysql_up.sql"))?;
+            record_applied(&pool, env.migration_type.into(), "mysql_up.sql")?;
         }
         MigrationType::ApplyWithData => {
             apply_with_insert(
                 &pool,
                 &migration_path.join("mysql_up.sql"),
                 &migration_path.join("mysql_fill_data.sql"),
+            )?;
+            record_applied(
+                &pool,
+                env.migration_type.into(),
+                "mysql_up.sql,mysql_fill_data.sql",
             )?;
         }
         MigrationType::ApplyAndClearData => {
@@ -60,18 +73,26 @@ pub fn run() -> anyhow::Result<()> {
                 &migration_path.join("mysql_up.sql"),
                 &migration_path.join("mysql_drop_data.sql"),
             )?;
+            record_applied(
+                &pool,
+                env.migration_type.into(),
+                "mysql_up.sql,mysql_drop_data.sql",
+            )?;
         }
     };
 
-    let kv = &[KeyValue::new(
-        "migration_mode",
-        Into::<&'static str>::into(env.migration_type),
-    )];
-    if let Some(migrations_counter) = MIGRATIONS_COUNTER.get() {
-        migrations_counter.add(1, kv);
-    }
-    if let Some(migrations_duration) = MIGRATIONS_DURATION.get() {
-        migrations_duration.record(timer.elapsed().as_secs_f64(), kv);
+    #[cfg(feature = "telemetry")]
+    {
+        let kv = &[KeyValue::new(
+            "migration_mode",
+            Into::<&'static str>::into(env.migration_type),
+        )];
+        if let Some(migrations_counter) = MIGRATIONS_COUNTER.get() {
+            migrations_counter.add(1, kv);
+        }
+        if let Some(migrations_duration) = MIGRATIONS_DURATION.get() {
+            migrations_duration.record(timer.elapsed().as_secs_f64(), kv);
+        }
     }
     tracing::info!("Process finished");
     Ok(())

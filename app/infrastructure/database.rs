@@ -1,4 +1,4 @@
-use mysql::{OptsBuilder, Pool};
+use mysql::{OptsBuilder, Pool, PoolConstraints, PoolOpts};
 use tracing::info;
 #[tracing::instrument(skip(password))]
 pub fn connect_to_database(
@@ -13,7 +13,8 @@ pub fn connect_to_database(
         .tcp_port(port)
         .db_name(Some(database))
         .user(Some(user))
-        .pass(Some(password));
+        .pass(Some(password))
+        .pool_opts(PoolOpts::default().with_constraints(PoolConstraints::new_const::<1, 1>()));
     let pool = Pool::new(opts)?;
     info!("Connected to database!");
     Ok(pool)

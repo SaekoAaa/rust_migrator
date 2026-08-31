@@ -1,13 +1,13 @@
+use crate::infrastructure::app;
+use tracing::{info_span, level_filters::LevelFilter};
+use tracing_subscriber::{Layer, layer::SubscriberExt, util::SubscriberInitExt};
+
+#[cfg(feature = "telemetry")]
 use {
-    crate::{
-        infrastructure::app,
-        observability::{metrics::init_metrics, otel::OtelGuard, tracing::init_traces},
-    },
+    crate::observability::{metrics::init_metrics, otel::OtelGuard, tracing::init_traces},
     dotenvy::var,
     opentelemetry::trace::TracerProvider as _,
-    tracing::{info_span, level_filters::LevelFilter},
     tracing_opentelemetry::OpenTelemetryLayer,
-    tracing_subscriber::{Layer, layer::SubscriberExt, util::SubscriberInitExt},
 };
 mod infrastructure;
 mod observability;
@@ -20,13 +20,27 @@ fn main() {
 }
 
 fn run() -> anyhow::Result<()> {
-    let level = tracing_subscriber::fmt::layer().with_filter(LevelFilter::INFO);
-    let subscriber = tracing_subscriber::registry().with(level);
-
     if let Err(e) = dotenvy::dotenv() {
         println!("Dotenv import 2 failed: {}. Fine for docker", e);
     };
 
+    #[cfg(not(feature = "telemetry"))]
+    tracing_subscriber::registry()
+        .with(tracing_subscriber::fmt::layer().with_filter(LevelFilter::INFO))
+        .init();
+
+    #[cfg(feature = "telemetry")]
+    let _otel_guard = init_telemetry()?;
+
+    let main_span = info_span!("app");
+    let _g = main_span.enter();
+    app::run()
+}
+
+#[cfg(feature = "telemetry")]
+fn init_telemetry() -> anyhow::Result<OtelGuard> {
+    let level = tracing_subscriber::fmt::layer().with_filter(LevelFilter::INFO);
+    let subscriber = tracing_subscriber::registry().with(level);
     let collector_url = var("COLLECTOR_URL").ok();
     let use_traces = var("WITH_TRACING").is_ok_and(|t| t == "true");
 
@@ -50,15 +64,8 @@ fn run() -> anyhow::Result<()> {
         let metrics = init_metrics(&format!("{}/metrics", collector_url))?;
         metrics_provider = Some(metrics)
     }
-    let _otel_guard = OtelGuard {
+    Ok(OtelGuard {
         tracer_provider: tracing_provider,
         meter_provider: metrics_provider,
-    };
-
-    let main_span = info_span!("app");
-    let _g = main_span.enter();
-    let res = app::run();
-    drop(_g);
-    drop(_otel_guard);
-    res
+    })
 }

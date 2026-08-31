@@ -10,7 +10,9 @@ A small, single-run MySQL migration utility intended for containers, deployment 
 - Four migration workflows: apply, revert, apply with seed data, and apply then clear data
 - Docker/Kubernetes-style secret file support
 - Non-root runtime container
-- Optional OTLP/HTTP traces and metrics
+- A single MySQL connection for predictable database resource usage
+- Schema version tracking for successful apply and revert operations
+- Compile-time optional OTLP/HTTP traces and metrics
 - Non-zero exit status on configuration, connection, file, SQL, or telemetry initialization errors
 
 ## Quick start
@@ -47,6 +49,23 @@ The directory configured by `MIGRATIONS_PATH` may contain these fixed filenames:
 
 `mysql_fill_data.sql` may use a `-- tx;` statement to commit the current data transaction and begin another one.
 
+### Schema versions
+
+On startup, the migrator creates a `schema_versions` table when it does not exist. Each successful apply operation records the next numeric version together with the migration mode, SQL filenames, and application timestamp. A revert requires an existing version and removes the latest version only after `mysql_down.sql` succeeds.
+
+The table is managed automatically:
+
+```sql
+CREATE TABLE schema_versions (
+    version BIGINT UNSIGNED NOT NULL PRIMARY KEY,
+    migration_mode VARCHAR(32) NOT NULL,
+    migration_files VARCHAR(512) NOT NULL,
+    applied_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+```
+
+Because the current migration files are fixed rather than versioned, this table records successful migration runs rather than checksums of independently versioned files.
+
 ## Configuration
 
 | Variable | Required | Description |
@@ -60,8 +79,8 @@ The directory configured by `MIGRATIONS_PATH` may contain these fixed filenames:
 | `MYSQL_PASSWORD_FILE` | Conditional | File containing the password |
 | `MIGRATIONS_PATH` | Yes | Directory containing the migration files |
 | `MIGRATION_TYPE` | No | Numeric operation, defaults to `1` |
-| `WITH_TRACING` | No | Set to `true` to enable OTLP tracing |
-| `WITH_METRICS` | No | Set to `true` to enable OTLP metrics |
+| `WITH_TRACING` | No | Set to `true` to enable OTLP tracing in a telemetry-enabled build |
+| `WITH_METRICS` | No | Set to `true` to enable OTLP metrics in a telemetry-enabled build |
 | `COLLECTOR_URL` | Conditional | OTLP base URL, for example `http://otel:4318/v1` |
 
 At least one source must be available for each credential. The direct variable takes precedence when both it and its corresponding `_FILE` variable are set.
@@ -77,7 +96,14 @@ At least one source must be available for each credential. The direct variable t
 
 ## Observability
 
-Tracing and metrics are disabled by default. When enabled, telemetry is sent over OTLP/HTTP to:
+Telemetry dependencies are excluded from default builds to minimize binary and image size. Build with the `telemetry` feature to include them:
+
+```sh
+cargo build --release --features telemetry
+docker build --build-arg 'CARGO_FEATURES=--features telemetry' -t mysql-migrator:telemetry .
+```
+
+Without that feature, `WITH_TRACING`, `WITH_METRICS`, and `COLLECTOR_URL` have no effect. In a telemetry-enabled build the exporters remain disabled at runtime unless their corresponding `WITH_*` variable is `true`. When enabled, telemetry is sent over OTLP/HTTP to:
 
 - `${COLLECTOR_URL}/traces`
 - `${COLLECTOR_URL}/metrics`
@@ -92,7 +118,7 @@ Recommended container settings include a read-only root filesystem, disabled pri
 
 ## Current limitations
 
-- No migration history table or checksum validation
+- No migration checksum validation
 - No database advisory lock; concurrent executions are unsafe
 - SQL is split on semicolons and therefore does not support stored procedures, triggers, custom delimiters, or semicolons inside SQL strings
 - MySQL DDL can cause implicit commits, so schema changes are not guaranteed to roll back atomically
@@ -108,6 +134,7 @@ cargo fmt --check
 cargo test
 cargo clippy --all-targets --all-features
 cargo build --release
+cargo build --release --features telemetry
 ```
 
 Task aliases are also available through [Task](https://taskfile.dev/):
@@ -121,4 +148,4 @@ task rac  # apply and clear data
 
 ## Roadmap
 
-The next reliability milestones are versioned migrations with checksums, migration-state tracking, MySQL advisory locking, a one-connection execution model, integration tests, and configurable TLS/timeouts.
+The next reliability milestones are versioned migration files with checksums, MySQL advisory locking, integration tests, and configurable TLS/timeouts.
