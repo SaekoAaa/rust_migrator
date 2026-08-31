@@ -2,13 +2,12 @@ use opentelemetry_otlp::{Protocol, SpanExporter, WithExportConfig};
 use opentelemetry_sdk::trace::{RandomIdGenerator, Sampler, SdkTracerProvider};
 
 use crate::observability::otel::get_resource;
-pub fn init_traces(otel_collector_url: &str) -> SdkTracerProvider {
+pub fn init_traces(otel_collector_url: &str) -> anyhow::Result<SdkTracerProvider> {
     let exporter = SpanExporter::builder()
         .with_http()
         .with_endpoint(otel_collector_url)
         .with_protocol(Protocol::HttpJson) //can be changed to `Protocol::HttpJson` to export in JSON format
-        .build()
-        .expect("Failed to create trace exporter");
+        .build()?;
 
     let provider = SdkTracerProvider::builder()
         .with_batch_exporter(exporter)
@@ -18,5 +17,5 @@ pub fn init_traces(otel_collector_url: &str) -> SdkTracerProvider {
         ))))
         .with_id_generator(RandomIdGenerator::default())
         .build();
-    provider
+    Ok(provider)
 }

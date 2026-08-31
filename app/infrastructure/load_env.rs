@@ -1,5 +1,5 @@
 use dotenvy::var;
-use strum_macros::{AsRefStr, IntoStaticStr};
+use strum_macros::IntoStaticStr;
 use tracing::info;
 
 pub struct Enviroment {
@@ -60,7 +60,7 @@ impl Enviroment {
                 info!("MYSQL_USER not found, using MYSQL_USER_FILE");
                 let user_path = read_env("MYSQL_USER_FILE")?;
                 let res = read_from_file(&user_path)?;
-                if res.len() == 0 {
+                if res.is_empty() {
                     let err = anyhow::anyhow!("File is empty!");
                     tracing::error!(err = %err, mysql_user_file = user_path);
                     Err(err)?
@@ -75,7 +75,7 @@ impl Enviroment {
                 info!("MYSQL_PASSWORD not found, using MYSQL_PASSWORD_FILE");
                 let pwd_path = read_env("MYSQL_PASSWORD_FILE")?;
                 let res = read_from_file(&pwd_path)?;
-                if res.len() == 0 {
+                if res.is_empty() {
                     let err = anyhow::anyhow!("File is empty!");
                     tracing::error!(err = %err, mysql_user_file = pwd_path);
                     Err(err)?

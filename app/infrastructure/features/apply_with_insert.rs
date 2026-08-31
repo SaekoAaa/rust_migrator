@@ -24,22 +24,20 @@ pub fn apply_with_insert(
                 path_to_create_table_file.display()
             )
         })?;
-        apply_transaction(&pool, &sql)?;
+        apply_transaction(pool, &sql)?;
         Ok::<_, anyhow::Error>(())
     })?;
 
     let span = debug_span!("Filling sql data", path = &path_to_insert_sql_file.to_str());
     span.in_scope(|| {
-        let fill_data_sql = read_to_string(&path_to_insert_sql_file)
-            .inspect_err(|e| {
-                tracing::error!(
-                    error = %e,
-                    "Failed to read fill data file at path: {}",
-                    path_to_insert_sql_file.display()
-                )
-            })
-            .unwrap();
-        apply_separately(&pool, &fill_data_sql).unwrap();
+        let fill_data_sql = read_to_string(path_to_insert_sql_file).inspect_err(|e| {
+            tracing::error!(
+                error = %e,
+                "Failed to read fill data file at path: {}",
+                path_to_insert_sql_file.display()
+            )
+        })?;
+        apply_separately(pool, &fill_data_sql)?;
         Ok::<_, anyhow::Error>(())
     })?;
     Ok(())

@@ -19,12 +19,24 @@ pub fn run() -> anyhow::Result<()> {
     let env = Enviroment::load_env().inspect_err(|e| {
         tracing::error!(error = %e, "Failed to load environment");
     })?;
-    let mysql_connection_string = format!(
-        "mysql://{}:{}@{}:{}/{}",
-        env.mysql_user, env.mysql_password, env.database_address, env.database_port, env.database
+    let database_port = env
+        .database_port
+        .parse::<u16>()
+        .map_err(|error| anyhow::anyhow!("Invalid MYSQL_PORT '{}': {error}", env.database_port))?;
+    tracing::info!(
+        database.address = %env.database_address,
+        database.port = database_port,
+        database.name = %env.database,
+        database.user = %env.mysql_user,
+        "Connecting to database"
     );
-    tracing::info!("connecting to db with: {}", mysql_connection_string);
-    let pool = connect_to_database(&mysql_connection_string)
+    let pool = connect_to_database(
+        &env.database_address,
+        database_port,
+        &env.database,
+        &env.mysql_user,
+        &env.mysql_password,
+    )
         .inspect_err(|error| tracing::error!(%error, database = env.database, database.user = env.mysql_user, database.address = env.database_address, database.port = env.database_port, "Connecting to database error"))?;
     let migration_path = Path::new(&env.migrations_path);
     let timer = std::time::Instant::now();

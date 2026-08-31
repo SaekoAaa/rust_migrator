@@ -33,7 +33,7 @@ pub fn init_metrics(collector_url: &str) -> anyhow::Result<SdkMeterProvider> {
                 .with_description("Shows amount of migrations")
                 .build(),
         )
-        .expect("MIGRATIONS_COUNTER already initialized");
+        .map_err(|_| anyhow::anyhow!("MIGRATIONS_COUNTER already initialized"))?;
 
     MIGRATIONS_DURATION
         .set(
@@ -42,6 +42,6 @@ pub fn init_metrics(collector_url: &str) -> anyhow::Result<SdkMeterProvider> {
                 .with_description("Shows latency of migrations")
                 .build(),
         )
-        .expect("MIGRATIONS_DURATION already initialized");
+        .map_err(|_| anyhow::anyhow!("MIGRATIONS_DURATION already initialized"))?;
     Ok(meter_provider)
 }

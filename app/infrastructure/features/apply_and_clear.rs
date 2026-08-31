@@ -14,14 +14,14 @@ pub fn apply_and_clear_data(
 ) -> anyhow::Result<()> {
     let span = debug_span!("applying_migration", path = &path_to_create_file.to_str());
     span.in_scope(|| {
-        let sql = read_to_string(&path_to_create_file).inspect_err(|e| {
+        let sql = read_to_string(path_to_create_file).inspect_err(|e| {
             tracing::error!(
                 error = %e,
                 "Failed to read migration file at path: {}",
                 path_to_create_file.display()
             )
         })?;
-        apply_transaction(&pool, &sql)?;
+        apply_transaction(pool, &sql)?;
         Ok::<_, anyhow::Error>(())
     })?;
 
@@ -37,7 +37,7 @@ pub fn apply_and_clear_data(
                 path_to_clear_tables_file.display()
             )
         })?;
-        apply_transaction(&pool, &clear_data_sql)?;
+        apply_transaction(pool, &clear_data_sql)?;
         Ok::<_, anyhow::Error>(())
     })?;
     Ok(())

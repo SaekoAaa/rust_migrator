@@ -2,3 +2,4 @@
 docker_versions.yaml
 .env
 target
+.idea
